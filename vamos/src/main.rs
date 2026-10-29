@@ -7,30 +7,26 @@ use crossterm::{
 #[warn(unused)]
 use std::io::{Stdout, Write, stdout};
 use std::{
-    alloc::Layout, collections, env, fs::File, io::{BufRead, BufReader}, time::Duration,
+    alloc::Layout,
+    collections, env,
+    fs::File,
+    io::{BufRead, BufReader},
+    time::Duration,
 };
+const STATUS_BAR_HEIGHT: u16 = 2;
+const LNUM_BAR_WIDTH: u16 = 4;
 
-struct EditorLayout {
-    lnum_w: u16,
-    lnum_h: u16,
-    status_w: u16,
-    status_h: u16,
+struct TextCursor {
+    x: u64,
+    y: u64,
 }
 
-impl EditorLayout {
-    fn default(term_rows: u16, term_cols: u16) -> Self {
-        //TODO: apply config file
-        Self {
-            lnum_w: 2,
-            lnum_h: term_rows - 2,
-            status_w: term_cols,
-            status_h: 2,
-        }
+impl TextCursor {
+    fn new() -> Self {
+        Self { x: (0), y: (0) }
     }
-
-    fn resize(&mut self, term_rows: u16, term_cols: u16) {
-        self.lnum_h = term_rows - self.status_h;
-        self.status_w = term_cols;
+    fn from(_x: u64, _y: u64) -> Self {
+        Self { x: (_x), y: (_y) }
     }
 }
 
@@ -40,7 +36,6 @@ struct TextBuffer {
     file: Option<File>,
     x: u64,
     y: u64,
-    layout: EditorLayout, 
     has_changed: bool,
 }
 
@@ -51,7 +46,6 @@ impl TextBuffer {
             file: None,
             x: 0,
             y: 0,
-            layout: EditorLayout::default(term_rows, term_cols)
             has_changed: false,
         }
     }
@@ -100,13 +94,57 @@ fn init_app(stdout: &mut Stdout) -> std::io::Result<(TextBuffer)> {
     Ok(buffer)
 }
 
-fn render(buffer: &TextBuffer, stdout: &mut Stdout) -> std::io::Result<()> {
-    let (cols, rows) = size()?;
+fn render_line_num(
+    buffer: &TextBuffer,
+    tcursor: &TextCursor,
+    stdout: &mut Stdout,
+) -> std::io::Result<()> {
+    let (mut cols, mut rows) = size()?;
+    rows -= STATUS_BAR_HEIGHT;
+    for screen_row in 0..rows {
+        queue!(
+            stdout,
+            cursor::MoveTo(0, screen_row),
+            Print(format!("{}", 1+buffer.y + screen_row as u64))
+        )?;
+    }
+    Ok(())
+}
 
+fn render_status_bar(
+    buffer: &TextBuffer,
+    tcursor: &TextCursor,
+    stdout: &mut Stdout,
+) -> std::io::Result<()> {
+    let (mut cols, mut rows) = size()?;
+
+    //print cursor position
+    queue!(
+        stdout,
+        cursor::MoveTo(LNUM_BAR_WIDTH, rows - STATUS_BAR_HEIGHT)
+    )?;
+    queue!(stdout, Print(format!("Cursor {}:{}", tcursor.y, tcursor.x)))?;
+    queue!(
+        stdout,
+        cursor::MoveTo(LNUM_BAR_WIDTH, rows - STATUS_BAR_HEIGHT + 1)
+    )?;
+    let file_name = "nazwa pliku";
+    // let file_name = match buffer.file {
+    //     None => "",
+    //     Some(&f) => "nazwa pliku",
+    // };
+    queue!(stdout, Print(format!("\"{}\"", file_name)))?;
+    Ok(())
+}
+
+fn render_text_buffer(buffer: &TextBuffer, stdout: &mut Stdout) -> std::io::Result<()> {
+    let (mut cols, mut rows) = size()?;
+    cols -= LNUM_BAR_WIDTH;
+    rows -= STATUS_BAR_HEIGHT;
     for screen_row in 0..rows {
         let file_row_idx = buffer.y as usize + screen_row as usize;
 
-        queue!(stdout, cursor::MoveTo(0, screen_row))?;
+        queue!(stdout, cursor::MoveTo(LNUM_BAR_WIDTH, screen_row))?;
 
         if let Some(line) = buffer.data.get(file_row_idx) {
             let visible_slice: String = line
@@ -121,6 +159,12 @@ fn render(buffer: &TextBuffer, stdout: &mut Stdout) -> std::io::Result<()> {
         queue!(stdout, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     }
 
+    Ok(())
+}
+fn render(buffer: &TextBuffer, tcursor: &TextCursor, stdout: &mut Stdout) -> std::io::Result<()> {
+    render_text_buffer(buffer, stdout);
+    render_status_bar(buffer, tcursor, stdout);
+    render_line_num(buffer, tcursor, stdout);
     stdout.flush()?;
     Ok(())
 }
@@ -143,8 +187,9 @@ fn handle_event() -> std::io::Result<bool> {
 fn main() -> std::io::Result<()> {
     let mut stdout = stdout();
     let mut buffer = init_app(&mut stdout)?;
+    let mut tcursor = TextCursor::new();
     loop {
-        render(&buffer, &mut stdout)?;
+        render(&buffer, &tcursor, &mut stdout)?;
         if handle_event()? {
             break;
         }
